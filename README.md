@@ -1,32 +1,32 @@
 # Topology-Aware Point Cloud Completion
 
-This repository contains the implementation of **Topo-PCN**, a topology-augmented point cloud completion framework designed to handle structural corruptions such as holes. The project also includes the implementation of a custom benchmark, **ModelNet-Topology**, which extends ModelNet with topological corruptions and annotations.
+A 3D point-cloud completion project that augments geometric reconstruction with **persistent-homology topology descriptors** to better represent structural defects such as holes and missing regions.
 
-##  Project Overview
+The repository compares three completion pipelines under the same benchmark and evaluation setup:
 
-- **Baseline Model:** Point Completion Network (PCN) (Yuan et al, 3DV 2018)
-- **Proposed Model:** Topo-PCN (PCN + topology features + topology loss)
-- **Comparison Model:** Point-Attention (Transformer-based) (Wang et al. AAAI 2024)
-- **Benchmark:** Modified ModelNet with topological corruptions
-- **Input:** Incomplete point clouds with associated 3D topology vectors
-- **Output:** Dense completed point clouds
+- **PCN baseline** — geometry-only Point Completion Network-style reconstruction.
+- **Topo-PCN** — injects a learned projection of a 3D topology descriptor into the PCN latent representation before decoding.
+- **PointAttN comparison** — attention-based completion model evaluated with the same geometric and topology-aware metrics.
 
-## Model Details
-Topo-PCN extends PCN by injecting a 3D topology vector (from persistent homology) into the latent feature, and adding a topology-aware loss based on bottleneck distance. These changes improve robustness to structural defects like holes.
+## Topo-PCN
 
-**Architecture:**
-- Encoder: PointNet-style shared MLP + global max pooling → 1024-d latent code
-- Topology: 3D topo vector projected and concatenated to latent
-- Decoder:
-  - Coarse: MLP → 1024 points
-  - Fine: Folding decoder → 4096 points
-- Chamfer loss (coarse + fine) + ramped topology loss
-- AdamW, cosine learning rate scheduling, gradient clipping, and mixed precision (AMP).
+Topo-PCN extends a PCN-style encoder-decoder with explicit topological information derived from persistent-homology annotations. The topology vector is projected through a learned layer and fused with the geometric latent representation, giving the decoder access to both local/global geometry and structural information.
 
-## Instructions
+The pipeline combines:
 
-**Dataset**
-Prepare your dataset in the following format:
+- PointNet-style geometric encoding
+- coarse-to-fine point-cloud decoding
+- learned topology-feature fusion
+- Chamfer-distance reconstruction objectives
+- hole-region error analysis
+- persistent-homology H1 bottleneck evaluation
+- F-score and early stopping
+
+This setup makes it possible to study whether explicit structural descriptors help completion models recover geometry when corruption changes hole/connectivity structure rather than only removing random points.
+
+## Dataset format
+
+The scripts expect paired clean and corrupted point-cloud files:
 
 ```text
 data/
@@ -41,43 +41,75 @@ data/
         └── ...
 ```
 
-Each .txt file should contain:
-- A header line (ignored)
-- A line with 3 topology features (or empty → replaced with zeros)
-- Point coordinates (x y z) per line
+Each `.txt` file contains:
 
-**Running the code**
-For each model (PCN.py, pointatt.py, topo-pcn.py): 
+1. a header line,
+2. three topology features,
+3. point coordinates `x y z`, one point per line.
 
-1. **Update dataset paths** in the script:
-   ```python
-   CLEAN_DIR   = r"/absolute/path/to/clean_with_holes"
-   DROPOUT_DIR = r"/absolute/path/to/dropout_local_0_with_holes"
-   SAVE_DIR    = r"runs/plane_topo_cf" > output 
-   ```
+The repository also includes the original `data.zip` artifact.
 
-2. **Install dependencies in requirements.txt** (if not already installed):
-   ```bash
-   pip install torch torchvision torchaudio
-   pip install numpy tqdm scikit-learn matplotlib
-   pip install gudhi
-   ```
-3. **Run the training model script** :
-   ```bash
-   python your_script_name.py
-   ```
-For example: 'python topo-pcn.py'
+## Installation
 
-4. Trained model will be saved as:
+```bash
+pip install -r requirements.txt
 ```
-runs/plane_topo_cf/best.pth
+
+For GPU environments, install the PyTorch build appropriate for the local CUDA/toolchain.
+
+## Path configuration
+
+By default the scripts read:
+
+```text
+data/air_plane_/clean_with_holes/
+data/air_plane_/dropout_local_0_with_holes/
 ```
+
+Paths can be overridden without editing source code:
+
+```bash
+export TOPO_CLEAN_DIR=/path/to/clean_with_holes
+export TOPO_DROPOUT_DIR=/path/to/dropout_local_0_with_holes
+```
+
+or with a shared root:
+
+```bash
+export TOPO_DATA_ROOT=/path/to/air_plane_
+```
+
+Model outputs are written under `runs/` by default.
+
+## Running
+
+```bash
+python pcn.py
+python topo-pcn.py
+python pointatt.py
+```
+
+### `pcn.py`
+Geometry-only PCN-style baseline with coarse/fine Chamfer reconstruction, hole-region evaluation, F-score, and early stopping.
+
+### `topo-pcn.py`
+Topology-augmented PCN model with learned fusion of the 3D topology descriptor. Validation reports geometric reconstruction metrics together with H1 bottleneck distance.
+
+### `pointatt.py`
+Attention-based comparison model evaluated under the same geometry/topology protocol.
+
+## Topology-aware evaluation
+
+Persistent-homology H1 bottleneck distance is computed with GUDHI to quantify structural similarity between prediction and target. This complements pointwise/geometric metrics by tracking whether the reconstructed point cloud preserves higher-level hole structure.
+
+## Implementation note
+
+The GUDHI bottleneck calculation is performed outside the PyTorch autograd graph, so in the current implementation it serves as a topology-aware evaluation/monitoring metric rather than a differentiable gradient term. Topological information still enters Topo-PCN directly through the learned topology-feature branch.
 
 ## Acknowledgement
-This project is part of COM S 6720: Advanced Topics in Artificial Intelligence at Iowa State University. Developed by:
-* Daniel Ye
-* Shakiba Khourashahi
-* Ilia Jahanshahi
 
+Developed as part of COM S 6720: Advanced Topics in Artificial Intelligence at Iowa State University by:
 
-
+- Daniel Ye
+- Shakiba Khourashahi
+- Ilia Jahanshahi
