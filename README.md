@@ -1,32 +1,22 @@
 # Topology-Aware Point Cloud Completion
 
-This repository contains the implementation of **Topo-PCN**, a topology-augmented point cloud completion framework designed to handle structural corruptions such as holes. The project also includes the implementation of a custom benchmark, **ModelNet-Topology**, which extends ModelNet with topological corruptions and annotations.
+This repository explores topology-aware 3D point-cloud completion for structural defects such as holes. It includes three training pipelines:
 
-##  Project Overview
+- **PCN baseline** — geometry-only Point Completion Network-style baseline.
+- **Topo-PCN** — augments the PCN latent representation with a 3D topology feature vector derived from persistent-homology annotations.
+- **PointAttN comparison** — attention-based completion baseline evaluated with the same geometric and topology-aware metrics.
 
-- **Baseline Model:** Point Completion Network (PCN) (Yuan et al, 3DV 2018)
-- **Proposed Model:** Topo-PCN (PCN + topology features + topology loss)
-- **Comparison Model:** Point-Attention (Transformer-based) (Wang et al. AAAI 2024)
-- **Benchmark:** Modified ModelNet with topological corruptions
-- **Input:** Incomplete point clouds with associated 3D topology vectors
-- **Output:** Dense completed point clouds
+## What is topology-aware here?
 
-## Model Details
-Topo-PCN extends PCN by injecting a 3D topology vector (from persistent homology) into the latent feature, and adding a topology-aware loss based on bottleneck distance. These changes improve robustness to structural defects like holes.
+Topo-PCN uses the 3D topology vector as an actual network input: the vector is projected through a learned layer and concatenated with the geometric latent code before decoding.
 
-**Architecture:**
-- Encoder: PointNet-style shared MLP + global max pooling → 1024-d latent code
-- Topology: 3D topo vector projected and concatenated to latent
-- Decoder:
-  - Coarse: MLP → 1024 points
-  - Fine: Folding decoder → 4096 points
-- Chamfer loss (coarse + fine) + ramped topology loss
-- AdamW, cosine learning rate scheduling, gradient clipping, and mixed precision (AMP).
+Training is driven by differentiable geometric reconstruction objectives such as Chamfer distance. Persistent-homology **H1 bottleneck distance** is computed with GUDHI as a structural evaluation/monitoring metric. Because that computation is performed outside the PyTorch autograd graph, it is **not used as a differentiable topology loss** in the current implementation.
 
-## Instructions
+This separation keeps the project technically clear: topology enters Topo-PCN through explicit features, while persistent-homology distance measures how well completed geometry preserves structural characteristics.
 
-**Dataset**
-Prepare your dataset in the following format:
+## Dataset format
+
+The scripts expect paired clean and corrupted point-cloud files. A convenient repository-relative layout is:
 
 ```text
 data/
@@ -41,43 +31,71 @@ data/
         └── ...
 ```
 
-Each .txt file should contain:
-- A header line (ignored)
-- A line with 3 topology features (or empty → replaced with zeros)
-- Point coordinates (x y z) per line
+Each `.txt` file uses:
 
-**Running the code**
-For each model (PCN.py, pointatt.py, topo-pcn.py): 
+1. a header line,
+2. a line containing three topology features (Topo-PCN uses these; other models skip the line),
+3. point coordinates `x y z`, one point per line.
 
-1. **Update dataset paths** in the script:
-   ```python
-   CLEAN_DIR   = r"/absolute/path/to/clean_with_holes"
-   DROPOUT_DIR = r"/absolute/path/to/dropout_local_0_with_holes"
-   SAVE_DIR    = r"runs/plane_topo_cf" > output 
-   ```
+The repository also contains the original `data.zip` artifact. It is intentionally left unchanged; you can extract or reorganize it into the layout above as needed.
 
-2. **Install dependencies in requirements.txt** (if not already installed):
-   ```bash
-   pip install torch torchvision torchaudio
-   pip install numpy tqdm scikit-learn matplotlib
-   pip install gudhi
-   ```
-3. **Run the training model script** :
-   ```bash
-   python your_script_name.py
-   ```
-For example: 'python topo-pcn.py'
+## Installation
 
-4. Trained model will be saved as:
+```bash
+pip install -r requirements.txt
 ```
-runs/plane_topo_cf/best.pth
+
+PyTorch installation can vary by CUDA/toolchain, so for GPU environments use the appropriate PyTorch build for your system.
+
+## Path configuration
+
+The scripts no longer contain machine-specific absolute paths. By default they read:
+
+```text
+data/air_plane_/clean_with_holes/
+data/air_plane_/dropout_local_0_with_holes/
 ```
+
+You can override paths without editing source code:
+
+```bash
+export TOPO_CLEAN_DIR=/path/to/clean_with_holes
+export TOPO_DROPOUT_DIR=/path/to/dropout_local_0_with_holes
+```
+
+Or set a shared dataset root:
+
+```bash
+export TOPO_DATA_ROOT=/path/to/air_plane_
+```
+
+Model outputs are written under `runs/` by default.
+
+## Running
+
+```bash
+python pcn.py
+python topo-pcn.py
+python pointatt.py
+```
+
+### `pcn.py`
+Geometry-only PCN-style baseline with coarse/fine Chamfer objectives, hole-region evaluation, F-score, and early stopping.
+
+### `topo-pcn.py`
+PCN-style model augmented with a learned projection of the 3D topology feature vector. Validation reports coarse/fine Chamfer distance, hole-region error, H1 bottleneck distance, and F-score.
+
+### `pointatt.py`
+Attention-based comparison model trained with Chamfer distance and evaluated with the same geometry/topology metrics.
+
+## Method scope
+
+The project investigates whether explicit topology descriptors improve completion when geometric defects alter connectivity or hole structure. The current implementation should be interpreted as **topology-feature-augmented learning with topology-aware evaluation**, rather than as a differentiable persistent-homology-loss framework.
 
 ## Acknowledgement
-This project is part of COM S 6720: Advanced Topics in Artificial Intelligence at Iowa State University. Developed by:
-* Daniel Ye
-* Shakiba Khourashahi
-* Ilia Jahanshahi
 
+This project was developed as part of COM S 6720: Advanced Topics in Artificial Intelligence at Iowa State University by:
 
-
+- Daniel Ye
+- Shakiba Khourashahi
+- Ilia Jahanshahi
