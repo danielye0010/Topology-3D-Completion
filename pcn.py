@@ -1,6 +1,7 @@
 # pcn_baseline
 
 import os, glob, random, numpy as np
+from pathlib import Path
 import torch, torch.nn as nn
 from torch.utils.data import Dataset, DataLoader
 from sklearn.model_selection import train_test_split
@@ -8,10 +9,13 @@ from tqdm import tqdm
 import matplotlib; matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
-# ---------- Hyper‑parameters ----------
-CLEAN_DIR   = r"D:\Desktop\t-gnn\clean"
-DROPOUT_DIR = r"D:\Desktop\t-gnn\dropout"
-SAVE_DIR    = r"runs/plane_pcn_baseline";  os.makedirs(SAVE_DIR, exist_ok=True)
+# ---------- Hyper-parameters ----------
+REPO_ROOT = Path(__file__).resolve().parent
+DATA_ROOT = Path(os.getenv("TOPO_DATA_ROOT", REPO_ROOT / "data" / "air_plane_"))
+CLEAN_DIR = os.getenv("TOPO_CLEAN_DIR", str(DATA_ROOT / "clean_with_holes"))
+DROPOUT_DIR = os.getenv("TOPO_DROPOUT_DIR", str(DATA_ROOT / "dropout_local_0_with_holes"))
+SAVE_DIR = os.getenv("TOPO_PCN_SAVE_DIR", str(REPO_ROOT / "runs" / "plane_pcn_baseline"))
+os.makedirs(SAVE_DIR, exist_ok=True)
 
 EPOCHS        = 200
 BATCH_SIZE    = 10
@@ -79,7 +83,7 @@ def fscore(a,b,thr=F_THRESH):
 
 # ---------- PCN model ----------
 class PCN(nn.Module):
-    """Two‑stage PointNet encoder + folding decoder."""
+    """Two-stage PointNet encoder + folding decoder."""
     def __init__(self, nc=COARSE_NPTS, g=GRID_SIZE, gs=GRID_SCALE):
         super().__init__();  self.nc, self.g = nc, g
         # encoder
@@ -93,7 +97,7 @@ class PCN(nn.Module):
             nn.Linear(512,512),  nn.ReLU(True),
             nn.Linear(512,3)
         )
-        # 2‑D grid (g²,2)
+        # 2-D grid (g^2,2)
         gx,gy = torch.meshgrid(torch.linspace(-gs,gs,g), torch.linspace(-gs,gs,g), indexing='ij')
         self.register_buffer('grid', torch.stack([gx,gy],-1).view(-1,2))
     def forward(self,x):
@@ -105,11 +109,11 @@ class PCN(nn.Module):
         # coarse output + clamp
         coarse = self.dec_c(feat).view(B,self.nc,3).clamp(-1,1)
         # folding
-        grid   = self.grid[None,None].expand(B,self.nc,-1,-1)          # (B,nc,g²,2)
-        center = coarse[:,:,None,:].expand(-1,-1,self.g**2,-1)         # (B,nc,g²,3)
-        gfeat  = feat[:,None,None,:].expand(-1,self.nc,self.g**2,-1)    # (B,nc,g²,1024)
-        foldin = torch.cat([grid,center,gfeat],-1)                      # (B,nc,g²,1029)
-        fine   = (self.fold(foldin)+center).view(B,-1,3).clamp(-1,1)    # (B, nc*g², 3)
+        grid   = self.grid[None,None].expand(B,self.nc,-1,-1)          # (B,nc,g^2,2)
+        center = coarse[:,:,None,:].expand(-1,-1,self.g**2,-1)         # (B,nc,g^2,3)
+        gfeat  = feat[:,None,None,:].expand(-1,self.nc,self.g**2,-1)    # (B,nc,g^2,1024)
+        foldin = torch.cat([grid,center,gfeat],-1)                      # (B,nc,g^2,1029)
+        fine   = (self.fold(foldin)+center).view(B,-1,3).clamp(-1,1)    # (B, nc*g^2, 3)
         return coarse, fine
 
 # ---------- Evaluation ----------
@@ -120,7 +124,7 @@ def evaluate(model, loader):
         x,y = x.to(DEVICE), y.to(DEVICE)
         _,pred = model(x); B=x.size(0)
         cd_tot += chamfer(pred,y).item()*B
-        # hole‑CD
+        # hole-CD
         m = (torch.cdist(y,x).min(-1)[0] > HOLE_THRESH)
         for b in range(B):
             idx = torch.nonzero(m[b],as_tuple=False)[:,0]
@@ -184,7 +188,7 @@ def main():
             print('↳ Best model saved')
         stop(cd_val);  print('-'*60)
         if stop.stop:
-            print(f'Early‑stopping at epoch {ep}'); break
+            print(f'Early-stopping at epoch {ep}'); break
 
     # final vis on best model
     model.load_state_dict(torch.load(os.path.join(SAVE_DIR,'best_model_pcn.pth')))
