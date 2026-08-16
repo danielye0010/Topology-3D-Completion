@@ -1,9 +1,14 @@
 """
-Topo‑PCN with 3‑D topology vector
+Topo-PCN with a 3-D topology feature vector.
+
+Training is driven by differentiable geometric reconstruction losses.
+Persistent-homology bottleneck distance is reported as a topology-aware
+monitoring/evaluation metric; it is not a differentiable training loss.
 """
 
 # ---------- imports ----------
 import os, glob, random, numpy as np
+from pathlib import Path
 from math import pi
 import torch, torch.nn as nn
 from torch.utils.data import Dataset, DataLoader
@@ -11,15 +16,18 @@ from sklearn.model_selection import train_test_split
 from tqdm import tqdm
 import gudhi, matplotlib; matplotlib.use("Agg")
 
-# ---------- hyper‑params ----------
-CLEAN_DIR   = r"D:\Desktop\t-gnn\clean"
-DROPOUT_DIR = r"D:\Desktop\t-gnn\dropout"
-SAVE_DIR    = r"runs/plane_topo_cf"; os.makedirs(SAVE_DIR, exist_ok=True)
+# ---------- hyper-params ----------
+REPO_ROOT = Path(__file__).resolve().parent
+DATA_ROOT = Path(os.getenv("TOPO_DATA_ROOT", REPO_ROOT / "data" / "air_plane_"))
+CLEAN_DIR = os.getenv("TOPO_CLEAN_DIR", str(DATA_ROOT / "clean_with_holes"))
+DROPOUT_DIR = os.getenv("TOPO_DROPOUT_DIR", str(DATA_ROOT / "dropout_local_0_with_holes"))
+SAVE_DIR = os.getenv("TOPO_PCN_TOPO_SAVE_DIR", str(REPO_ROOT / "runs" / "plane_topo_cf"))
+os.makedirs(SAVE_DIR, exist_ok=True)
 
 EPOCHS, BATCH, N_IN = 200, 8, 1024
 COARSE, GRID = 1024, 3
 FINE = COARSE * GRID**2
-LR, ALPHA, LAMBDA, RAMP = 1e-4, 0.1, 0.1, 0.3
+LR, ALPHA = 1e-4, 0.1
 HOLE_TH, SAMPLE, F_TH = 0.1, 1024, 0.01
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 SEED = 42
@@ -145,24 +153,23 @@ def main():
     val_loader = DataLoader(PlaneDS(vd, vc, N_IN, False), BATCH, False, num_workers=2)
     model = TopoPCN().to(DEVICE); opt = torch.optim.AdamW(model.parameters(), lr=LR)
     sched = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(opt, T_0=EPOCHS)
-    scaler = torch.cuda.amp.GradScaler(); best = 1e9; ramp = int(EPOCHS * RAMP)
+    scaler = torch.cuda.amp.GradScaler(); best = 1e9
     for ep in range(EPOCHS):
-        model.train(); lamb = LAMBDA * min(1, ep / ramp)
+        model.train()
         for x, y, t in tqdm(tr_loader, desc=f"Ep {ep+1}/{EPOCHS}"):
             x, y, t = x.to(DEVICE), y.to(DEVICE), t.to(DEVICE); opt.zero_grad()
             with torch.cuda.amp.autocast():
                 c, f = model(x, t)
                 loss_c = chamfer(c, y)
                 loss_f = chamfer(f, y)
-                topo = bottleneck(diag_h1(f[0].detach().cpu().numpy()),
-                                  diag_h1(y[0].cpu().numpy()))
-                loss = loss_c + ALPHA * loss_f + lamb * topo
+                loss = loss_c + ALPHA * loss_f
             scaler.scale(loss).backward()
             scaler.unscale_(opt); nn.utils.clip_grad_norm_(model.parameters(), 1.)
             scaler.step(opt); scaler.update()
         sched.step()
         if (ep + 1) % 10 == 0:
             m = evaluate(model, val_loader)
+            print("Validation @ ep", ep + 1, m)
             if m['cd_f'] < best:
                 best = m['cd_f']; torch.save(model.state_dict(), os.path.join(SAVE_DIR, 'best.pth'))
                 print("Saved best @ ep", ep + 1, m)
