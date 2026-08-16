@@ -211,7 +211,7 @@ def fscore(pred: torch.Tensor, gt: torch.Tensor,
 # ---------- evaluation ----------
 @torch.no_grad()
 def evaluate(model: nn.Module, loader: DataLoader):
-    """Return CD, HoleCD, H1 bottleneck, and F-score."""
+    """Return sample-averaged CD, HoleCD, H1 bottleneck, and F-score."""
     model.eval()
     tot_cd = tot_hole = tot_h1 = tot_hole_pts = 0.0
     tot_fs = 0.0
@@ -235,9 +235,9 @@ def evaluate(model: nn.Module, loader: DataLoader):
                                     y[b][idxs].unsqueeze(0)).item() * nh
                 tot_hole_pts += nh
 
-        h1_pred = diag_h1(pred[0].cpu().numpy())
-        h1_gt   = diag_h1(y[0].cpu().numpy())
-        tot_h1 += bottleneck(h1_pred, h1_gt)
+            h1_pred = diag_h1(pred[b].cpu().numpy())
+            h1_gt   = diag_h1(y[b].cpu().numpy())
+            tot_h1 += bottleneck(h1_pred, h1_gt)
 
         idx_pred = torch.randperm(OUTPUT_NPTS)[:2048]
         idx_gt   = torch.randperm(OUTPUT_NPTS)[:2048]
