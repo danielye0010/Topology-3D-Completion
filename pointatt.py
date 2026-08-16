@@ -120,7 +120,7 @@ class SFA(nn.Module):
         return self.norm2(x + res)
 
 class GDP(nn.Module):
-    """Global-Detail Propagation (cross-attention with FPS down-sampled keys)."""
+    """Global-Detail Propagation with FPS-synchronized feature/coordinate downsampling."""
     def __init__(self, dim: int, down_ratio: int = 2, heads: int = 4):
         super().__init__()
         self.down  = down_ratio
@@ -143,13 +143,20 @@ class GDP(nn.Module):
             far  = dist.max(-1)[1]
         return idx
 
-    def forward(self, feats: torch.Tensor, coords: torch.Tensor) -> torch.Tensor:
+    def forward(self, feats: torch.Tensor, coords: torch.Tensor):
         B, N, D = feats.shape
+        if coords.size(1) != N:
+            raise ValueError(
+                f"Feature/coordinate point counts must match, got {N} and {coords.size(1)}"
+            )
         k = max(1, N // self.down)
         idx = self.fps(coords, k)
         key_val = feats.gather(1, idx.unsqueeze(-1).expand(-1, -1, D))
+        key_coords = coords.gather(
+            1, idx.unsqueeze(-1).expand(-1, -1, coords.size(-1))
+        )
         att, _ = self.attn(key_val, feats, feats)
-        return self.norm(att + key_val)
+        return self.norm(att + key_val), key_coords
 
 # ---------- PointAttN ----------
 class PointAttN(nn.Module):
@@ -171,9 +178,13 @@ class PointAttN(nn.Module):
 
     def forward(self, pts: torch.Tensor) -> torch.Tensor:
         feats = self.input_proj(pts)
-        feats = self.sfa1(self.gdp1(feats, pts))
-        feats = self.sfa2(self.gdp2(feats, pts))
-        feats = self.sfa3(self.gdp3(feats, pts))
+        coords = pts
+        feats, coords = self.gdp1(feats, coords)
+        feats = self.sfa1(feats)
+        feats, coords = self.gdp2(feats, coords)
+        feats = self.sfa2(feats)
+        feats, coords = self.gdp3(feats, coords)
+        feats = self.sfa3(feats)
 
         code  = self.pool(feats.transpose(1, 2)).squeeze(-1)
         out   = self.decoder(code).view(-1, self.out_pts, 3)
