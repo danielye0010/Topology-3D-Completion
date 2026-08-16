@@ -1,11 +1,14 @@
 r"""
-PointAttN
-* Backbone : PointAttN (self‑ & cross‑attention on points)
-* Loss     : CD + λ(t)·H1 Bottleneck    (geometry first, topology ramp‑in)
+PointAttN comparison model.
+
+* Backbone: PointAttN-style self/cross-attention on points
+* Training objective: Chamfer distance
+* Topology: H1 bottleneck distance reported as a monitoring/evaluation metric
 """
 
 # ---------- imports ----------
 import os, glob, random, math, numpy as np
+from pathlib import Path
 from math import pi
 from typing import List, Tuple
 
@@ -19,10 +22,12 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-# ---------- hyper‑params ----------
-CLEAN_DIR   = r"D:\Desktop\t-gnn\clean"
-DROPOUT_DIR = r"D:\Desktop\t-gnn\dropout"
-SAVE_DIR    = "runs/strict_pointattn"
+# ---------- hyper-params ----------
+REPO_ROOT = Path(__file__).resolve().parent
+DATA_ROOT = Path(os.getenv("TOPO_DATA_ROOT", REPO_ROOT / "data" / "air_plane_"))
+CLEAN_DIR = os.getenv("TOPO_CLEAN_DIR", str(DATA_ROOT / "clean_with_holes"))
+DROPOUT_DIR = os.getenv("TOPO_DROPOUT_DIR", str(DATA_ROOT / "dropout_local_0_with_holes"))
+SAVE_DIR = os.getenv("TOPO_POINTATT_SAVE_DIR", str(REPO_ROOT / "runs" / "strict_pointattn"))
 os.makedirs(SAVE_DIR, exist_ok=True)
 
 EPOCHS        = 200
@@ -33,8 +38,6 @@ BASE_LR       = 1e-4
 WEIGHT_DECAY  = 1e-3
 CLIP_NORM     = 1.0
 EVAL_FREQ     = 5
-LAMBDA_FINAL  = 0.10            # topology weight after ramp
-RAMP_RATIO    = 0.3             # geometry‑only first 30 % epochs
 PATIENCE      = 10              # early stop
 SEED          = 42
 DEVICE        = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -100,7 +103,7 @@ def mlp(ch: List[int]) -> nn.Sequential:
 
 # ---------- attention blocks ----------
 class SFA(nn.Module):
-    """Self‑Feature‑Attention."""
+    """Self-Feature-Attention."""
     def __init__(self, dim: int, heads: int = 4, ffn_mult: int = 2):
         super().__init__()
         self.attn  = nn.MultiheadAttention(dim, heads, batch_first=True)
@@ -117,7 +120,7 @@ class SFA(nn.Module):
         return self.norm2(x + res)
 
 class GDP(nn.Module):
-    """Global‑Detail Propagation (cross‑attention with FPS down‑sampled keys)."""
+    """Global-Detail Propagation (cross-attention with FPS down-sampled keys)."""
     def __init__(self, dim: int, down_ratio: int = 2, heads: int = 4):
         super().__init__()
         self.down  = down_ratio
@@ -126,7 +129,7 @@ class GDP(nn.Module):
 
     @staticmethod
     def fps(coords: torch.Tensor, k: int) -> torch.Tensor:
-        """Farthest‑point sampling indices."""
+        """Farthest-point sampling indices."""
         B, N, _ = coords.shape
         idx = torch.zeros(B, k, dtype=torch.long, device=coords.device)
         dist = torch.full((B, N), 1e10, device=coords.device)
@@ -134,24 +137,23 @@ class GDP(nn.Module):
         batch = torch.arange(B, device=coords.device)
         for i in range(k):
             idx[:, i] = far
-            centroid  = coords[batch, far].unsqueeze(1)           # [B,1,3]
-            d = ((coords - centroid) ** 2).sum(-1)               # [B,N]
+            centroid  = coords[batch, far].unsqueeze(1)
+            d = ((coords - centroid) ** 2).sum(-1)
             dist = torch.minimum(dist, d)
             far  = dist.max(-1)[1]
-        return idx                                               # [B,k]
+        return idx
 
     def forward(self, feats: torch.Tensor, coords: torch.Tensor) -> torch.Tensor:
         B, N, D = feats.shape
         k = max(1, N // self.down)
-        idx = self.fps(coords, k)                                # [B,k]
-        key_val = feats.gather(1, idx.unsqueeze(-1).expand(-1, -1, D))  # [B,k,D]
-        # cross‑attention: queries = key_val   keys/values = feats (all points)
+        idx = self.fps(coords, k)
+        key_val = feats.gather(1, idx.unsqueeze(-1).expand(-1, -1, D))
         att, _ = self.attn(key_val, feats, feats)
         return self.norm(att + key_val)
 
 # ---------- PointAttN ----------
 class PointAttN(nn.Module):
-    """Strict PointAttN producing 4 096 points directly."""
+    """PointAttN-style completion model producing 4096 points directly."""
     def __init__(self, out_pts: int = OUTPUT_NPTS, feat_dim: int = 256):
         super().__init__()
         self.out_pts = out_pts
@@ -168,17 +170,16 @@ class PointAttN(nn.Module):
         self.decoder = mlp([feat_dim, feat_dim * 2, 3 * out_pts])
 
     def forward(self, pts: torch.Tensor) -> torch.Tensor:
-        # pts: [B,N,3]
-        feats = self.input_proj(pts)                             # [B,N,D]
+        feats = self.input_proj(pts)
         feats = self.sfa1(self.gdp1(feats, pts))
         feats = self.sfa2(self.gdp2(feats, pts))
         feats = self.sfa3(self.gdp3(feats, pts))
 
-        code  = self.pool(feats.transpose(1, 2)).squeeze(-1)     # [B,D]
-        out   = self.decoder(code).view(-1, self.out_pts, 3)     # [B,M,3]
+        code  = self.pool(feats.transpose(1, 2)).squeeze(-1)
+        out   = self.decoder(code).view(-1, self.out_pts, 3)
         return out
 
-# ---------- geometry / topology losses ----------
+# ---------- geometry / topology metrics ----------
 def chamfer(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
     """Squared L2 bidirectional Chamfer Distance."""
     d = torch.cdist(a, b, p=2) ** 2
@@ -200,17 +201,17 @@ def bottleneck(d1: np.ndarray, d2: np.ndarray) -> float:
 
 def fscore(pred: torch.Tensor, gt: torch.Tensor,
            thr: float = FSCORE_TH) -> float:
-    """F‑score @ thr (unit‑sphere radius ≈1)."""
+    """F-score @ thr (unit-sphere radius approximately 1)."""
     d1 = torch.cdist(pred, gt, p=2)
     d2 = d1.transpose(1, 2)
-    p = (d1.min(-1)[0] < thr).float().mean(1)      # precision
-    r = (d2.min(-1)[0] < thr).float().mean(1)      # recall
+    p = (d1.min(-1)[0] < thr).float().mean(1)
+    r = (d2.min(-1)[0] < thr).float().mean(1)
     return (2 * p * r / (p + r + 1e-8)).mean().item()
 
 # ---------- evaluation ----------
 @torch.no_grad()
 def evaluate(model: nn.Module, loader: DataLoader):
-    """Return CD, HoleCD, H1, F‑score."""
+    """Return CD, HoleCD, H1 bottleneck, and F-score."""
     model.eval()
     tot_cd = tot_hole = tot_h1 = tot_hole_pts = 0.0
     tot_fs = 0.0
@@ -219,10 +220,8 @@ def evaluate(model: nn.Module, loader: DataLoader):
         pred = model(x)
         B = x.size(0)
 
-        # Chamfer
         tot_cd += chamfer(pred, y).item() * B
 
-        # Hole CD
         d_gt_in = torch.cdist(y, x).min(-1)[0]
         masks = d_gt_in > HOLE_THRESH
         for b in range(B):
@@ -236,12 +235,10 @@ def evaluate(model: nn.Module, loader: DataLoader):
                                     y[b][idxs].unsqueeze(0)).item() * nh
                 tot_hole_pts += nh
 
-        # H1 topology (first sample of batch)
         h1_pred = diag_h1(pred[0].cpu().numpy())
         h1_gt   = diag_h1(y[0].cpu().numpy())
         tot_h1 += bottleneck(h1_pred, h1_gt)
 
-        # F‑score (subsample 2 k points to save memory)
         idx_pred = torch.randperm(OUTPUT_NPTS)[:2048]
         idx_gt   = torch.randperm(OUTPUT_NPTS)[:2048]
         tot_fs  += fscore(pred[:, idx_pred], y[:, idx_gt]) * B
@@ -256,7 +253,7 @@ def evaluate(model: nn.Module, loader: DataLoader):
 # ---------- visualisation ----------
 @torch.no_grad()
 def visualize(model: nn.Module, ds: Dataset, idx: int = 0):
-    """Scatter‑plot input / prediction / hole‑GT."""
+    """Scatter-plot input / prediction / hole-GT."""
     x, y = ds[idx]
     inp = x.numpy()
     pred = model(x.unsqueeze(0).to(DEVICE)).cpu().squeeze(0).numpy()
@@ -268,7 +265,7 @@ def visualize(model: nn.Module, ds: Dataset, idx: int = 0):
     ax.scatter(inp[:, 0],   inp[:, 1],   inp[:, 2],   s=5, c='red',   label='Input')
     ax.scatter(pred[:, 0],  pred[:, 1],  pred[:, 2],  s=2, c='green', label='Pred')
     ax.scatter(holes[:, 0], holes[:, 1], holes[:, 2], s=8, c='blue',  label='Hole GT')
-    ax.set_title('Strict PointAttN Completion')
+    ax.set_title('PointAttN Completion')
     ax.legend()
     plt.tight_layout()
     plt.savefig(os.path.join(SAVE_DIR, 'topo_completion.png'))
@@ -292,7 +289,6 @@ class EarlyStopping:
 
 # ---------- training ----------
 def main():
-    # data split
     drops  = sorted(glob.glob(os.path.join(DROPOUT_DIR, 'sample_*.txt')))
     cleans = sorted(glob.glob(os.path.join(CLEAN_DIR,   'sample_*.txt')))
     tr_d, val_d, tr_c, val_c = train_test_split(
@@ -305,7 +301,6 @@ def main():
         PlaneDS(val_d, val_c, INPUT_NPTS, False),
         BATCH_SIZE, False, num_workers=2, pin_memory=True)
 
-    # model & optim
     model  = PointAttN().to(DEVICE)
     opt    = torch.optim.AdamW(model.parameters(),
                                lr=BASE_LR, weight_decay=WEIGHT_DECAY)
@@ -313,22 +308,15 @@ def main():
     scaler = torch.cuda.amp.GradScaler()
     stopper= EarlyStopping()
     best_cd = float('inf')
-    ramp_epochs = int(EPOCHS * RAMP_RATIO)
 
-    # training loop
     for ep in range(1, EPOCHS + 1):
         model.train()
-        lamb = LAMBDA_FINAL * min(1.0, ep / ramp_epochs)          # dynamic λ(t)
         for x, y in tqdm(tr_loader, desc=f'Epoch {ep}/{EPOCHS}'):
             x, y = x.to(DEVICE), y.to(DEVICE)
             opt.zero_grad(set_to_none=True)
             with torch.cuda.amp.autocast():
                 pred = model(x)
-                loss_cd = chamfer(pred, y)
-                loss_topo = bottleneck(
-                    diag_h1(pred[0].detach().cpu().numpy()),
-                    diag_h1(y[0].detach().cpu().numpy()))
-                loss = loss_cd + lamb * loss_topo
+                loss = chamfer(pred, y)
             scaler.scale(loss).backward()
             scaler.unscale_(opt)
             nn.utils.clip_grad_norm_(model.parameters(), CLIP_NORM)
@@ -336,11 +324,9 @@ def main():
             scaler.update()
         sched.step()
 
-        # validation
         if ep % EVAL_FREQ == 0 or ep == EPOCHS:
             cd, hcd, h1, fs = evaluate(model, val_loader)
-            print(f'Val CD={cd:.4f} HoleCD={hcd:.4f} H1={h1:.4f} '
-                  f'F={fs:.4f} λ={lamb:.2f}')
+            print(f'Val CD={cd:.4f} HoleCD={hcd:.4f} H1={h1:.4f} F={fs:.4f}')
             if cd < best_cd:
                 best_cd = cd
                 torch.save(model.state_dict(),
@@ -351,7 +337,6 @@ def main():
                 print(f'Early stopping at epoch {ep}')
                 break
 
-    # visualise best
     model.load_state_dict(torch.load(
         os.path.join(SAVE_DIR, 'best_model_pointattn.pth'),
         map_location=DEVICE))
