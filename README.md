@@ -1,22 +1,32 @@
 # Topology-Aware Point Cloud Completion
 
-This repository explores topology-aware 3D point-cloud completion for structural defects such as holes. It includes three training pipelines:
+A 3D point-cloud completion project that augments geometric reconstruction with **persistent-homology topology descriptors** to better represent structural defects such as holes and missing regions.
 
-- **PCN baseline** — geometry-only Point Completion Network-style baseline.
-- **Topo-PCN** — augments the PCN latent representation with a 3D topology feature vector derived from persistent-homology annotations.
-- **PointAttN comparison** — attention-based completion baseline evaluated with the same geometric and topology-aware metrics.
+The repository compares three completion pipelines under the same benchmark and evaluation setup:
 
-## What is topology-aware here?
+- **PCN baseline** — geometry-only Point Completion Network-style reconstruction.
+- **Topo-PCN** — injects a learned projection of a 3D topology descriptor into the PCN latent representation before decoding.
+- **PointAttN comparison** — attention-based completion model evaluated with the same geometric and topology-aware metrics.
 
-Topo-PCN uses the 3D topology vector as an actual network input: the vector is projected through a learned layer and concatenated with the geometric latent code before decoding.
+## Topo-PCN
 
-Training is driven by differentiable geometric reconstruction objectives such as Chamfer distance. Persistent-homology **H1 bottleneck distance** is computed with GUDHI as a structural evaluation/monitoring metric. Because that computation is performed outside the PyTorch autograd graph, it is **not used as a differentiable topology loss** in the current implementation.
+Topo-PCN extends a PCN-style encoder-decoder with explicit topological information derived from persistent-homology annotations. The topology vector is projected through a learned layer and fused with the geometric latent representation, giving the decoder access to both local/global geometry and structural information.
 
-This separation keeps the project technically clear: topology enters Topo-PCN through explicit features, while persistent-homology distance measures how well completed geometry preserves structural characteristics.
+The pipeline combines:
+
+- PointNet-style geometric encoding
+- coarse-to-fine point-cloud decoding
+- learned topology-feature fusion
+- Chamfer-distance reconstruction objectives
+- hole-region error analysis
+- persistent-homology H1 bottleneck evaluation
+- F-score and early stopping
+
+This setup makes it possible to study whether explicit structural descriptors help completion models recover geometry when corruption changes hole/connectivity structure rather than only removing random points.
 
 ## Dataset format
 
-The scripts expect paired clean and corrupted point-cloud files. A convenient repository-relative layout is:
+The scripts expect paired clean and corrupted point-cloud files:
 
 ```text
 data/
@@ -31,13 +41,13 @@ data/
         └── ...
 ```
 
-Each `.txt` file uses:
+Each `.txt` file contains:
 
 1. a header line,
-2. a line containing three topology features (Topo-PCN uses these; other models skip the line),
+2. three topology features,
 3. point coordinates `x y z`, one point per line.
 
-The repository also contains the original `data.zip` artifact. It is intentionally left unchanged; you can extract or reorganize it into the layout above as needed.
+The repository also includes the original `data.zip` artifact.
 
 ## Installation
 
@@ -45,25 +55,25 @@ The repository also contains the original `data.zip` artifact. It is intentional
 pip install -r requirements.txt
 ```
 
-PyTorch installation can vary by CUDA/toolchain, so for GPU environments use the appropriate PyTorch build for your system.
+For GPU environments, install the PyTorch build appropriate for the local CUDA/toolchain.
 
 ## Path configuration
 
-The scripts no longer contain machine-specific absolute paths. By default they read:
+By default the scripts read:
 
 ```text
 data/air_plane_/clean_with_holes/
 data/air_plane_/dropout_local_0_with_holes/
 ```
 
-You can override paths without editing source code:
+Paths can be overridden without editing source code:
 
 ```bash
 export TOPO_CLEAN_DIR=/path/to/clean_with_holes
 export TOPO_DROPOUT_DIR=/path/to/dropout_local_0_with_holes
 ```
 
-Or set a shared dataset root:
+or with a shared root:
 
 ```bash
 export TOPO_DATA_ROOT=/path/to/air_plane_
@@ -80,21 +90,25 @@ python pointatt.py
 ```
 
 ### `pcn.py`
-Geometry-only PCN-style baseline with coarse/fine Chamfer objectives, hole-region evaluation, F-score, and early stopping.
+Geometry-only PCN-style baseline with coarse/fine Chamfer reconstruction, hole-region evaluation, F-score, and early stopping.
 
 ### `topo-pcn.py`
-PCN-style model augmented with a learned projection of the 3D topology feature vector. Validation reports coarse/fine Chamfer distance, hole-region error, H1 bottleneck distance, and F-score.
+Topology-augmented PCN model with learned fusion of the 3D topology descriptor. Validation reports geometric reconstruction metrics together with H1 bottleneck distance.
 
 ### `pointatt.py`
-Attention-based comparison model trained with Chamfer distance and evaluated with the same geometry/topology metrics.
+Attention-based comparison model evaluated under the same geometry/topology protocol.
 
-## Method scope
+## Topology-aware evaluation
 
-The project investigates whether explicit topology descriptors improve completion when geometric defects alter connectivity or hole structure. The current implementation should be interpreted as **topology-feature-augmented learning with topology-aware evaluation**, rather than as a differentiable persistent-homology-loss framework.
+Persistent-homology H1 bottleneck distance is computed with GUDHI to quantify structural similarity between prediction and target. This complements pointwise/geometric metrics by tracking whether the reconstructed point cloud preserves higher-level hole structure.
+
+## Implementation note
+
+The GUDHI bottleneck calculation is performed outside the PyTorch autograd graph, so in the current implementation it serves as a topology-aware evaluation/monitoring metric rather than a differentiable gradient term. Topological information still enters Topo-PCN directly through the learned topology-feature branch.
 
 ## Acknowledgement
 
-This project was developed as part of COM S 6720: Advanced Topics in Artificial Intelligence at Iowa State University by:
+Developed as part of COM S 6720: Advanced Topics in Artificial Intelligence at Iowa State University by:
 
 - Daniel Ye
 - Shakiba Khourashahi
