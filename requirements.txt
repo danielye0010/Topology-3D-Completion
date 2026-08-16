@@ -1,3 +1,6 @@
-pip install torch torchvision torchaudio
-pip install numpy tqdm scikit-learn matplotlib
-pip install gudhi
+torch
+numpy
+tqdm
+scikit-learn
+matplotlib
+gudhi
