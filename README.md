@@ -119,11 +119,3 @@ Persistent-homology H1 bottleneck distance is computed with GUDHI to quantify st
 ## Implementation note
 
 The GUDHI bottleneck calculation is performed outside the PyTorch autograd graph, so in the current implementation it serves as a topology-aware evaluation/monitoring metric rather than a differentiable gradient term. Topological information still enters Topo-PCN directly through the learned topology-feature branch.
-
-## Acknowledgement
-
-Developed as part of COM S 6720: Advanced Topics in Artificial Intelligence at Iowa State University by:
-
-- Daniel Ye
-- Shakiba Khourashahi
-- Ilia Jahanshahi
