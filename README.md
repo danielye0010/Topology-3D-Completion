@@ -8,6 +8,20 @@ The repository compares three completion pipelines under the same benchmark and 
 - **Topo-PCN** — injects a learned projection of a 3D topology descriptor into the PCN latent representation before decoding.
 - **PointAttN comparison** — attention-based completion model evaluated with the same geometric and topology-aware metrics.
 
+## Project website & presentation
+
+[**Explore Mind the Gap →**](https://danielye.net/projects/topology-completion/)
+
+[![Original project airplane point cloud with a marked hole](https://danielye.net/assets/img/projects/topology-completion.png)](https://danielye.net/projects/topology-completion/)
+
+The project page includes a rotatable viewer of three actual paired benchmark samples, original presentation figures, the method, and the historical validation comparison.
+
+- [Project website](https://danielye.net/projects/topology-completion/)
+- [Original final presentation (PDF)](https://danielye.net/projects/topology-completion/assets/presentation.pdf)
+- [Figure and data provenance](https://danielye.net/projects/topology-completion/assets/provenance.json)
+
+The presentation reports Hole CD of 0.3699 for Baseline-PCN, 0.2962 for Topo-PCN, and 0.1648 for PointAttention. These are historical course-project results, not a rerun of the current scripts. Hole CD is a local geometric metric, not a topology certificate. The released implementation's treatment of bottleneck distance is described below.
+
 ## Topo-PCN
 
 Topo-PCN extends a PCN-style encoder-decoder with explicit topological information derived from persistent-homology annotations. The topology vector is projected through a learned layer and fused with the geometric latent representation, giving the decoder access to both local/global geometry and structural information.
